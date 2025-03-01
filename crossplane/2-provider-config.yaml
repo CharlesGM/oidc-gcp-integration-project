@@ -1,0 +1,14 @@
+# 2-provider-config.yaml
+apiVersion: gcp.upbound.io/v1beta1
+kind: ProviderConfig
+metadata:
+  name: gcp-provider-config
+  namespace: crossplane-system
+spec:
+  projectID: play-project-325908
+  credentials:
+    source: Secret
+    secretRef:
+      namespace: crossplane-system
+      name: gcp-creds
+      key: credentials.json

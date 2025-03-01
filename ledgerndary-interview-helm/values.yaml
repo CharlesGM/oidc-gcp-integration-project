@@ -1,0 +1,39 @@
+# values.yaml
+name: ledgerndary
+namespace: ledgerndary
+replicaCount: 3
+image:
+  repository: europe-west1-docker.pkg.dev/play-project-325908/ledgerndary/ledgerndary
+  tag: "9f3ea12165da387677e9b67ed040ba0853db8226"
+  pullPolicy: IfNotPresent
+service:
+  type: ClusterIP
+  port: 8080
+ingress:
+  enabled: false
+rbac:
+  create: true
+  serviceAccount:
+    create: true
+    name: "ledgerndary-sa"
+    annotations: {}
+  roles:
+    developers:
+      create: true
+      name: "developer-role"
+      groups:
+        - "developers@ledgerndary.com"
+      rules:
+        - apiGroups: ["", "apps", "batch"]
+          resources: ["pods", "deployments", "services", "jobs"]
+          verbs: ["get", "list", "watch", "create", "update", "patch"]
+    sre:
+      create: true
+      name: "sre-admin"
+      groups:
+        - "sre-team@ledgerndary.com"
+      clusterWide: true
+      rules:
+        - apiGroups: ["*"]
+          resources: ["*"]
+          verbs: ["*"]

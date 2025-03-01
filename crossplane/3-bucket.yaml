@@ -1,0 +1,18 @@
+# 3-bucket.yaml
+apiVersion: storage.gcp.upbound.io/v1beta1
+kind: Bucket
+metadata:
+  name: ledgerndary-crossplane-bucket
+  namespace: crossplane-system
+spec:
+  forProvider:
+    location: europe-west1
+    storageClass: STANDARD
+    uniformBucketLevelAccess: true
+    versioning:
+      - enabled: true
+    labels:
+      environment: production
+      managed-by: crossplane
+  providerConfigRef:
+    name: gcp-provider-config

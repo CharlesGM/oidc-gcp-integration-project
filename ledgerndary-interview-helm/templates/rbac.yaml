@@ -1,0 +1,115 @@
+# templates/rbac.yaml
+{{- if .Values.rbac.create }}
+# ServiceAccount Section
+{{- if .Values.rbac.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.rbac.serviceAccount.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    # Standard Helm labels for resource tracking
+    app: {{ .Values.name }}
+    chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    release: "{{ .Release.Name }}"
+    heritage: "{{ .Release.Service }}"
+  {{- with .Values.rbac.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+{{- end }}
+
+# Developer Role Section - Namespace-scoped permissions
+{{- if .Values.rbac.roles.developers.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.rbac.roles.developers.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Values.name }}
+    chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    release: "{{ .Release.Name }}"
+    heritage: "{{ .Release.Service }}"
+rules:
+{{ toYaml .Values.rbac.roles.developers.rules | indent 2 }}
+---
+# RoleBinding for developer groups
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.rbac.roles.developers.name }}-binding
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Values.name }}
+    chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    release: "{{ .Release.Name }}"
+    heritage: "{{ .Release.Service }}"
+subjects:
+{{- range .Values.rbac.roles.developers.groups }}
+- kind: Group
+  name: {{ . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+roleRef:
+  kind: Role
+  name: {{ .Values.rbac.roles.developers.name }}
+  apiGroup: rbac.authorization.k8s.io
+---
+{{- end }}
+
+# SRE Admin Role Section
+{{- if .Values.rbac.roles.sre.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+{{- if .Values.rbac.roles.sre.clusterWide }}
+kind: ClusterRole
+{{- else }}
+kind: Role
+{{- end }}
+metadata:
+  name: {{ .Values.rbac.roles.sre.name }}
+  {{- if not .Values.rbac.roles.sre.clusterWide }}
+  namespace: {{ .Values.namespace }}
+  {{- end }}
+  labels:
+    app: {{ .Values.name }}
+    chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    release: "{{ .Release.Name }}"
+    heritage: "{{ .Release.Service }}"
+rules:
+{{ toYaml .Values.rbac.roles.sre.rules | indent 2 }}
+---
+# Create corresponding binding (RoleBinding or ClusterRoleBinding)
+apiVersion: rbac.authorization.k8s.io/v1
+{{- if .Values.rbac.roles.sre.clusterWide }}
+kind: ClusterRoleBinding
+{{- else }}
+kind: RoleBinding
+{{- end }}
+metadata:
+  name: {{ .Values.rbac.roles.sre.name }}-binding
+  {{- if not .Values.rbac.roles.sre.clusterWide }}
+  namespace: {{ .Values.namespace }}
+  {{- end }}
+  labels:
+    app: {{ .Values.name }}
+    chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    release: "{{ .Release.Name }}"
+    heritage: "{{ .Release.Service }}"
+subjects:
+{{- range .Values.rbac.roles.sre.groups }}
+- kind: Group
+  name: {{ . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+roleRef:
+  {{- if .Values.rbac.roles.sre.clusterWide }}
+  kind: ClusterRole
+  {{- else }}
+  kind: Role
+  {{- end }}
+  name: {{ .Values.rbac.roles.sre.name }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}

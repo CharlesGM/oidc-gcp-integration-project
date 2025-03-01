@@ -1,0 +1,174 @@
+# Workflow name
+name: Build and Deploy Ledgerndary Image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'app.py'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - 'ledgerndary-helm/**'
+      # Exclude infrastructure changes
+      - '!terraform/**'
+      - '!crossplane/**'
+      - '!argocd/**'
+
+# Environment variables used throughout the workflow
+env:
+ PROJECT_ID: play-project-325908      # GCP project identifier
+ GCP_REGION: europe-west1             # GCP region for resources
+ IMAGE_NAME: ledgerndary            # Name of the Docker image
+ HELM_CHART_PATH: ledgerndary-helm  # Path to Helm chart directory
+ REPOSITORY_NAME: ledgerndary       # Artifact Registry repository name
+
+jobs:
+ build-and-push-ledgerndary-image:
+   runs-on: ubuntu-latest             # Use Ubuntu as the runner
+   timeout-minutes: 30                # Add timeout protection
+   
+   permissions:
+     contents: write                  # Changed to write for git push
+     id-token: write                  # Permission for OIDC token
+
+   steps:
+   # Checkout repository code
+   - uses: actions/checkout@v3
+     with:
+       fetch-depth: 1                  # Only fetch latest commit for efficiency
+       token: ${{ secrets.TOKEN_GITHUB }}  # Token for push access
+
+   # Set up Docker Buildx for better caching
+   - name: Set up Docker Buildx
+     uses: docker/setup-buildx-action@v2
+
+   # Set up GCP authentication using Workload Identity Federation
+   - id: 'auth'
+     name: 'Authenticate to Google Cloud'
+     uses: 'google-github-actions/auth@v1'
+     with:
+       workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+       service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+       token_format: 'access_token'
+       audience: ${{ secrets.AUDIENCE }}
+
+   # Install and configure Google Cloud SDK
+   - name: Set up Cloud SDK
+     uses: google-github-actions/setup-gcloud@v1
+
+    # Install gke-gcloud-auth-plugin for kubectl authentication
+   - name: Install GKE Auth Plugin
+     run: |
+        echo "Installing GKE authentication plugin..."
+        # Remove existing gcloud from PATH
+        export PATH=$(echo $PATH | tr ':' '\n' | grep -v 'google-cloud-sdk' | tr '\n' ':')
+        # Install the auth plugin
+        gcloud components install gke-gcloud-auth-plugin --quiet
+        # Set the environment variable for auth plugin
+        export USE_GKE_GCLOUD_AUTH_PLUGIN=True
+        echo "USE_GKE_GCLOUD_AUTH_PLUGIN=True" >> $GITHUB_ENV
+        
+
+   # Get credentials for GKE cluster access
+   - name: Get GKE credentials
+     uses: google-github-actions/get-gke-credentials@v1
+     with:
+       cluster_name: 'ledgerndary-cluster'
+       location: ${{ env.GCP_REGION }}
+       project_id: ${{ env.PROJECT_ID }}
+       use_auth_provider: true
+
+   # Configure Docker for using GCP Artifact Registry
+   - name: Configure Docker for GCP Artifact Registry
+     run: |
+       gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+   # Build and push Docker image with caching
+   - name: Build and Push Docker image
+     uses: docker/build-push-action@v4
+     with:
+       context: .
+       push: true
+       tags: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY_NAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+       cache-from: type=gha
+       cache-to: type=gha,mode=max
+
+   # Update Helm values with new image tag
+   - name: Update Helm values
+     run: |
+        set -e  # Exit on any error
+        
+        IMAGE_TAG="${{ github.sha }}"  # Use full SHA for consistency
+        VALUES_FILE="${{ env.HELM_CHART_PATH }}/values.yaml"
+        
+        echo "Updating Helm values with tag: $IMAGE_TAG"
+
+        # Install yq from mikefarah
+        wget https://github.com/mikefarah/yq/releases/download/v4.35.1/yq_linux_amd64 -O /usr/local/bin/yq
+        chmod +x /usr/local/bin/yq
+
+        # Update the values using yq
+        yq -i '.image.repository = "'${{ env.GCP_REGION }}'-docker.pkg.dev/'${{ env.PROJECT_ID }}'/'${{ env.REPOSITORY_NAME }}'/'${{ env.IMAGE_NAME }}'"' $VALUES_FILE
+        yq -i '.image.tag = "'$IMAGE_TAG'"' $VALUES_FILE
+
+    # Validate Helm Chart (optional but recommended)
+   - name: Validate Helm Chart
+     run: |
+        helm lint ${{ env.HELM_CHART_PATH }}
+
+   # Commit and push the updated Helm values
+   - name: Commit and push updated Helm values
+     run: |
+       set -e  # Exit on any error
+       
+       # Configure git
+       git config --global user.name 'GitHub Actions'
+       git config --global user.email 'actions@github.com'
+       
+       # Check for changes
+       if [[ -n $(git status -s) ]]; then
+         echo "Changes detected, committing and pushing"
+         git add ${{ env.HELM_CHART_PATH }}/values.yaml
+         git commit -m "Update image tag in Helm values [skip ci]"
+         git push
+       else
+         echo "No changes to commit"
+       fi
+
+   - name: Deploy to GKE
+     env:
+        USE_GKE_GCLOUD_AUTH_PLUGIN: True
+     run: |
+        # Reactivate GCP authentication
+        gcloud container clusters get-credentials ledgerndary-cluster \
+          --region ${{ env.GCP_REGION }} \
+          --project ${{ env.PROJECT_ID }}
+        
+        # Set namespace
+        NAMESPACE="ledgerndary"
+        
+        # Create namespace if it doesn't exist
+        kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+  
+          # Check if release exists and is deployed successfully
+          if helm list -n ${NAMESPACE} | grep -q "ledgerndary" && \
+              helm status ledgerndary -n ${NAMESPACE} | grep -q "deployed"; then
+            echo "Found successfully deployed release, performing upgrade..."
+            helm upgrade ledgerndary ${{ env.HELM_CHART_PATH }} \
+              --namespace ${NAMESPACE} \
+              --wait \
+              --timeout 10m \
+              --atomic
+          else
+            echo "No successful deployment found, cleaning up any failed releases..."
+            helm uninstall ledgerndary -n ${NAMESPACE} || true
+            sleep 10
+            
+            echo "Installing new ledgerndary release..."
+            helm install ledgerndary ${{ env.HELM_CHART_PATH }} \
+              --namespace ${NAMESPACE} \
+              --wait \
+              --timeout 10m \
+              --atomic
+          fi

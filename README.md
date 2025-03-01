@@ -1,4 +1,4 @@
-# OIDC, GitHub Actions GCP Integration Project 🚀 
+# OIDC, GitHub Actions, GCP Integration Project 🚀 
 A complete CI/CD pipeline with GKE, GitHub Actions, and Terraform using Workload Identity Federation. 🔄
 The aim of this project is to showcase how you can use GCP's workload identinty for your CI/CD with Github Actions.
 
